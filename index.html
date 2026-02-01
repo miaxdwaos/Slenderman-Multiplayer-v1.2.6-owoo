@@ -19,24 +19,22 @@
         #chat-container { position: absolute; bottom: 20px; left: 20px; width: 300px; z-index: 40; background: rgba(0,0,0,0.5); border-radius: 5px; display: flex; flex-direction: column; }
         #chat-messages { height: 120px; overflow-y: auto; color: white; font-size: 13px; padding: 10px; display: flex; flex-direction: column; border-bottom: 1px solid #333; }
         #chat-input { background: rgba(0,0,0,0.8); border: 1px solid #555; width: calc(100% - 20px); margin: 5px; padding: 5px; color: white; outline: none; }
-        #win-msg { color: #2ecc71; font-size: 24px; font-weight: bold; text-align: center; margin-bottom: 10px; display: none; }
     </style>
 </head>
 <body>
 
 <div id="crosshair">+</div>
-<div id="game-stats">PÁGINAS: <span id="note-count">0</span>/<span id="total-notes">0</span></div>
+<div id="game-stats">PÁGINAS: <span id="note-count">0</span> / <span id="total-notes">0</span></div>
 
 <div id="ui">
     <div id="lobby-panel">
-        <div id="win-msg">YOU WON</div>
         <div>TU ID: <b id="my-id" style="color:#3498db">...</b></div>
         <div id="setup-controls" style="margin-top: 10px;">
             <input type="text" id="peer-id-input" placeholder="ID del Host">
             <button class="btn-join" onclick="connectToHost()">UNIRSE AL JUEGO</button>
         </div>
         <button id="start-btn" class="btn-start" onclick="startGame()">INICIAR PARTIDA</button>
-        <div id="status-msg" style="color: #f1c40f; margin-top: 10px;">Encuentra las páginas en las paredes blancas</div>
+        <div id="status-msg" style="color: #f1c40f; margin-top: 10px;">Limpia fantasmas automáticamente</div>
     </div>
 </div>
 
@@ -53,37 +51,28 @@
     const chatMessages = document.getElementById('chat-messages');
     const chatInput = document.getElementById('chat-input');
     
-    // El dígito 2 representa una pared con página
+    // El dígito 2 representa paredes con páginas (rojas)
     let worldMap = [
         [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
-        [1,0,0,0,0,0,0,0,2,0,0,0,0,0,0,1],
-        [1,0,1,1,1,1,0,1,1,1,1,1,1,1,0,1],
+        [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+        [1,0,1,1,2,1,0,1,1,1,1,1,1,1,0,1],
         [1,0,1,0,0,0,0,0,0,0,0,0,0,1,0,1],
-        [1,2,1,0,1,1,1,1,1,1,1,1,0,1,2,1],
+        [1,0,2,0,1,1,1,1,1,1,1,1,0,2,0,1],
         [1,0,0,0,1,0,0,0,0,0,0,1,0,0,0,1],
-        [1,0,1,0,1,0,1,1,1,1,0,1,1,1,0,1],
-        [1,0,1,0,0,0,1,2,0,0,0,0,0,0,0,1],
+        [1,0,1,0,2,0,1,1,1,1,0,2,1,1,0,1],
+        [1,0,1,0,0,0,1,0,0,0,0,0,0,0,0,1],
         [1,0,1,1,1,0,1,0,1,1,1,1,1,1,0,1],
-        [1,0,0,0,1,0,0,0,1,0,0,0,0,1,0,1],
+        [1,0,0,0,1,0,0,0,2,0,0,0,0,1,0,1],
         [1,1,1,0,1,1,1,0,1,0,1,1,0,1,0,1],
-        [1,0,2,0,0,0,1,0,1,0,2,1,0,1,0,1],
+        [1,0,0,0,0,0,2,0,1,0,0,1,0,1,0,1],
         [1,0,1,1,1,0,1,0,1,1,0,1,0,1,0,1],
-        [1,0,0,0,1,0,0,0,0,0,0,0,0,0,2,1],
+        [1,0,0,0,1,0,0,0,0,0,0,0,0,0,0,1],
         [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
     ];
 
     const peer = new Peer();
     let myId, hostConn, connections = {}, players = {}, notes = [], slenderman = { x: 8.5, y: 8.5, active: false };
-    let gameStarted = false, notesCollected = 0, isDead = false, totalPages = 0;
-
-    function countPages() {
-        let count = 0;
-        for(let r=0; r<worldMap.length; r++)
-            for(let c=0; c<worldMap[r].length; c++) if(worldMap[r][c] === 2) count++;
-        return count;
-    }
-    totalPages = countPages();
-    document.getElementById('total-notes').innerText = totalPages;
+    let gameStarted = false, notesCollected = 0, isDead = false, maxNotes = 0;
 
     peer.on('open', id => {
         myId = id;
@@ -111,60 +100,53 @@
                 players[data.id].isDead = data.isDead;
                 players[data.id].lastSeen = Date.now();
             }
-        } else if (data.type === 'collect') {
-            if (!hostConn) { // Si soy host, proceso la colecta
-                if(worldMap[data.x][data.y] === 2) {
-                    worldMap[data.x][data.y] = 0;
-                    notesCollected++;
-                    checkWinCondition();
-                    syncToAll();
-                }
-            }
+        } else if (data.type === 'chat') {
+            addChatMessage(data.sender, data.text);
+            if (!hostConn) broadcast(data, data.sender);
         } else if (data.type === 'update') {
-            worldMap = data.map;
+            worldMap = data.worldMap;
             slenderman = data.slenderman;
             notesCollected = data.notesCollected;
-            totalPages = data.totalPages;
-            
-            if(data.win) {
-                gameStarted = false;
-                document.getElementById('ui').classList.remove('hidden');
-                document.getElementById('win-msg').style.display = 'block';
-                document.exitPointerLock();
-            } else if(data.gameStarted && !gameStarted) {
+            maxNotes = data.maxNotes;
+            if(data.gameStarted && !gameStarted) {
                 gameStarted = true;
                 document.getElementById('ui').classList.add('hidden');
-                document.getElementById('win-msg').style.display = 'none';
+            } else if (!data.gameStarted && gameStarted) {
+                gameStarted = false;
+                document.getElementById('ui').classList.remove('hidden');
+                document.getElementById('status-msg').innerText = "YOU WON!";
+                document.exitPointerLock();
             }
-            
             let incoming = data.players;
             for(let id in players) if(id !== myId && !incoming[id]) delete players[id];
             for(let id in incoming) if(id !== myId) players[id] = incoming[id];
         }
     }
 
-    function checkWinCondition() {
-        if(notesCollected >= totalPages && gameStarted) {
-            broadcast({ type: 'update', players, map: worldMap, slenderman, gameStarted: false, notesCollected, totalPages, win: true });
-            gameStarted = false;
-            document.getElementById('ui').classList.remove('hidden');
-            document.getElementById('win-msg').style.display = 'block';
-            document.exitPointerLock();
-        }
-    }
-
     function removePlayer(peerId) {
         if (players[peerId]) {
             delete players[peerId];
-            if (connections[peerId]) { connections[peerId].close(); delete connections[peerId]; }
-            addChatMessage("Sistema", "Un jugador abandonó.");
+            if (connections[peerId]) {
+                connections[peerId].close();
+                delete connections[peerId];
+            }
+            addChatMessage("Sistema", "Un jugador abandonó la partida.");
+            if (Object.keys(players).length <= 1 && gameStarted) {
+                alert("Te has quedado solo. Partida terminada.");
+                location.reload();
+            }
             syncToAll();
         }
     }
 
     setInterval(() => {
         if (!hostConn) {
-            for (let id in players) if (id !== myId && Date.now() - players[id].lastSeen > 4000) removePlayer(id);
+            const ahora = Date.now();
+            for (let id in players) {
+                if (id !== myId && ahora - players[id].lastSeen > 4000) {
+                    removePlayer(id);
+                }
+            }
         }
     }, 2000);
 
@@ -180,25 +162,32 @@
             }, 30);
         });
         hostConn.on('data', handleData);
+        hostConn.on('close', () => { alert("Conexión con Host perdida."); location.reload(); });
     }
 
     function startGame() {
+        if (Object.keys(players).length < 2) return alert("Necesitas más jugadores.");
         gameStarted = true;
         notesCollected = 0;
-        isDead = false;
-        // Reiniciar mapa si es necesario aquí (opcional)
+        maxNotes = 0;
+        // Contar cuantas páginas (2) hay en el mapa
+        for(let r=0; r<worldMap.length; r++) {
+            for(let c=0; c<worldMap[r].length; c++) {
+                if(worldMap[r][c] === 2) maxNotes++;
+            }
+        }
         document.getElementById('ui').classList.add('hidden');
-        document.getElementById('win-msg').style.display = 'none';
         slenderman.active = true;
         syncToAll();
     }
 
-    function broadcast(data) {
-        for (let id in connections) if (connections[id].open) connections[id].send(data);
+    function broadcast(data, exclude = null) {
+        for (let id in connections) if (connections[id].open && id !== exclude) connections[id].send(data);
+        if (hostConn && hostConn.open && exclude !== 'host') hostConn.send(data);
     }
 
     function syncToAll() {
-        if(!hostConn) broadcast({ type: 'update', players, map: worldMap, slenderman, gameStarted, notesCollected, totalPages, win: false });
+        if(!hostConn) broadcast({ type: 'update', players, worldMap, slenderman, gameStarted, notesCollected, maxNotes });
     }
 
     function addChatMessage(sender, text) {
@@ -208,11 +197,13 @@
         chatMessages.scrollTop = chatMessages.scrollHeight;
     }
 
-    // --- MOVIMIENTO Y RENDER ---
-    let posX = 1.5, posY = 1.5, dirX = 1, dirY = 0, planeX = 0, planeY = 0.66;
+    window.addEventListener('unload', () => peer.destroy());
+
+    let posX = 1.5, posY = 1.5;
+    let dirX = 1, dirY = 0, planeX = 0, planeY = 0.66;
     let moveSpeed = 0.1, mouseSensitivity = 0.003;
 
-    canvas.addEventListener('click', () => { if(gameStarted) canvas.requestPointerLock(); });
+    canvas.addEventListener('click', () => { if(!chatInput.matches(':focus')) canvas.requestPointerLock(); });
 
     document.addEventListener('mousemove', (e) => {
         if (document.pointerLockElement === canvas) {
@@ -233,28 +224,52 @@
     function handleMovement() {
         if(!gameStarted || isDead) return;
         let step = moveSpeed;
-        if(keys['KeyW']) {
-            if(worldMap[Math.floor(posX + dirX * step)][Math.floor(posY)] <= 0) posX += dirX * step;
-            if(worldMap[Math.floor(posX)][Math.floor(posY + dirY * step)] <= 0) posY += dirY * step;
-        }
-        if(keys['KeyS']) {
-            if(worldMap[Math.floor(posX - dirX * step)][Math.floor(posY)] <= 0) posX -= dirX * step;
-            if(worldMap[Math.floor(posX)][Math.floor(posY - dirY * step)] <= 0) posY -= dirY * step;
+        
+        // Recoger página si el jugador está cerca de un bloque tipo 2
+        let checkX = Math.floor(posX + dirX * 0.5);
+        let checkY = Math.floor(posY + dirY * 0.5);
+        if(worldMap[checkX] && worldMap[checkX][checkY] === 2) {
+            if(!hostConn) {
+                worldMap[checkX][checkY] = 1; // Convertir en pared normal
+                notesCollected++;
+                if(notesCollected >= maxNotes) {
+                    gameStarted = false;
+                }
+                syncToAll();
+            } else {
+                // El cliente no edita el mapa, solo el host lo procesa via heartbeat o similar
+                // En este script simplificado, el host detecta la proximidad de todos
+            }
         }
 
-        // Recoger páginas mirando a la pared (distancia corta)
-        if(keys['Space'] || keys['KeyE']) {
-            let cx = Math.floor(posX + dirX * 0.5);
-            let cy = Math.floor(posY + dirY * 0.5);
-            if(worldMap[cx] && worldMap[cx][cy] === 2) {
-                if(hostConn) hostConn.send({ type: 'collect', x: cx, y: cy });
-                else { 
-                    worldMap[cx][cy] = 0; 
-                    notesCollected++; 
-                    checkWinCondition();
-                    syncToAll(); 
+        // Host valida colección de todos los jugadores
+        if(!hostConn) {
+            for(let id in players) {
+                let p = players[id];
+                let px = Math.floor(p.x), py = Math.floor(p.y);
+                // Mirar alrededor del jugador
+                for(let x=-1; x<=1; x++) {
+                    for(let y=-1; y<=1; y++) {
+                        if(worldMap[px+x] && worldMap[px+x][py+y] === 2) {
+                            if(Math.hypot(p.x-(px+x+0.5), p.y-(py+y+0.5)) < 0.8) {
+                                worldMap[px+x][py+y] = 1;
+                                notesCollected++;
+                                if(notesCollected >= maxNotes) gameStarted = false;
+                                syncToAll();
+                            }
+                        }
+                    }
                 }
             }
+        }
+
+        if(keys['KeyW']) {
+            if(worldMap[Math.floor(posX + dirX * step)][Math.floor(posY)] === 0) posX += dirX * step;
+            if(worldMap[Math.floor(posX)][Math.floor(posY + dirY * step)] === 0) posY += dirY * step;
+        }
+        if(keys['KeyS']) {
+            if(worldMap[Math.floor(posX - dirX * step)][Math.floor(posY)] === 0) posX -= dirX * step;
+            if(worldMap[Math.floor(posX)][Math.floor(posY - dirY * step)] === 0) posY -= dirY * step;
         }
 
         if(!hostConn && slenderman.active) {
@@ -262,9 +277,8 @@
             slenderman.x += Math.cos(angle) * 0.025;
             slenderman.y += Math.sin(angle) * 0.025;
             if(Math.hypot(posX - slenderman.x, posY - slenderman.y) < 0.4) {
-                isDead = true; 
-                document.exitPointerLock(); 
-                document.getElementById('ui').classList.remove('hidden'); 
+                if(Object.keys(players).length <= 1) { alert("ATRAPADO."); location.reload(); }
+                else { isDead = true; document.exitPointerLock(); document.getElementById('ui').classList.remove('hidden'); }
             }
             syncToAll();
         }
@@ -275,7 +289,8 @@
         const w = canvas.width, h = canvas.height;
         ctx.fillStyle = "#000"; ctx.fillRect(0, 0, w, h);
 
-        if(!gameStarted) {
+        if(!gameStarted && notesCollected === 0) {
+            ctx.fillStyle = "white"; ctx.textAlign = "center"; ctx.fillText("LOBBY: ESPERANDO JUGADORES", w/2, h/2);
             requestAnimationFrame(render); return;
         }
 
@@ -285,7 +300,7 @@
             let rayDirX = dirX + planeX * cameraX, rayDirY = dirY + planeY * cameraX;
             let mapX = Math.floor(posX), mapY = Math.floor(posY);
             let deltaX = Math.abs(1 / rayDirX), deltaY = Math.abs(1 / rayDirY);
-            let stepX, stepY, sideDistX, sideDistY, hit = 0, side, tileType = 0;
+            let stepX, stepY, sideDistX, sideDistY, hit = 0, side;
 
             if(rayDirX < 0) { stepX = -1; sideDistX = (posX - mapX) * deltaX; }
             else { stepX = 1; sideDistX = (mapX + 1.0 - posX) * deltaX; }
@@ -295,15 +310,19 @@
             while(hit === 0) {
                 if(sideDistX < sideDistY) { sideDistX += deltaX; mapX += stepX; side = 0; }
                 else { sideDistY += deltaY; mapY += stepY; side = 1; }
-                if(worldMap[mapX][mapY] > 0) { hit = 1; tileType = worldMap[mapX][mapY]; }
+                if(worldMap[mapX][mapY] > 0) hit = worldMap[mapX][mapY];
             }
             let perpDist = (side === 0) ? (sideDistX - deltaX) : (sideDistY - deltaY);
             zBuffer[x] = perpDist;
             let lineHeight = Math.floor(h / perpDist);
             
-            let color = Math.max(0, 150 - (perpDist * 15));
-            if(tileType === 2) ctx.strokeStyle = `rgb(${color+100},${color+100},${color+100})`; // Pared blanca (Página)
-            else ctx.strokeStyle = `rgb(${side?color*0.5:color},${side?color*0.5:color},${side?color*0.5:color})`;
+            // Color rojo si el muro es tipo 2 (página)
+            if (hit === 2) {
+                ctx.strokeStyle = side ? '#aa0000' : '#ff0000';
+            } else {
+                let color = Math.max(0, 150 - (perpDist * 15));
+                ctx.strokeStyle = `rgb(${side?color*0.5:color},${side?color*0.5:color},${side?color*0.5:color})`;
+            }
             
             ctx.beginPath(); ctx.moveTo(x, h/2-lineHeight/2); ctx.lineTo(x, h/2+lineHeight/2); ctx.stroke();
         }
@@ -311,6 +330,7 @@
         let sprites = [];
         if(slenderman.active) sprites.push({...slenderman, color:"#111", sX:0.5, sY:1.8});
         for(let id in players) if(id !== myId && !players[id].isDead) sprites.push({...players[id], sX:0.4, sY:0.6});
+
         sprites.sort((a,b) => Math.hypot(posX-b.x, posY-b.y) - Math.hypot(posX-a.x, posY-a.y));
         sprites.forEach(s => {
             let relX = s.x - posX, relY = s.y - posY;
@@ -327,7 +347,7 @@
         });
 
         document.getElementById('note-count').innerText = notesCollected;
-        document.getElementById('total-notes').innerText = totalPages;
+        document.getElementById('total-notes').innerText = maxNotes;
         handleMovement();
         requestAnimationFrame(render);
     }
